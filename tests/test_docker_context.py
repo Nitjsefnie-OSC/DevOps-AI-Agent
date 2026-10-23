@@ -411,3 +411,59 @@ class TestDockerContext:
         }
         assert enriched.get("ci_logs") == ci_logs
         assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_buildkit_summary_skips_colonless_solver_error(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        log = (
+            "ERROR: failed to solve linear system\n"
+            'ERROR: failed to solve: process "/bin/sh -c pip install -r requirements.txt" '
+            "did not complete successfully: exit code: 1\n"
+        )
+        ci_logs["failed_jobs"][0]["logs"] = log
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": (
+                'ERROR: failed to solve: process "/bin/sh -c pip install -r requirements.txt" '
+                "did not complete successfully: exit code: 1"
+            ),
+            "errors": [
+                "ERROR: failed to solve linear system",
+                'ERROR: failed to solve: process "/bin/sh -c pip install -r requirements.txt" '
+                "did not complete successfully: exit code: 1",
+            ],
+            "raw": log[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_buildkit_step_skips_embedded_and_malformed_markers(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        log = (
+            "prefix #7 [3/5] RUN pip install -r requirements.txt\n"
+            "#7 [3/x] RUN pip install -r requirements.txt\n"
+            "#6 [2/5] COPY requirements.txt .\n"
+            "ERROR: No matching distribution found for missing-package\n"
+        )
+        ci_logs["failed_jobs"][0]["logs"] = log
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": "#6 [2/5] COPY requirements.txt .",
+            "errors": ["ERROR: No matching distribution found for missing-package"],
+            "raw": log[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
+        assert "collection_error" not in enriched
