@@ -10,5 +10,5 @@ def parse_build_error(log: str) -> dict:
     if step is None:
         step = next((l for l in lines if re.match(r"^#\d+ \[\d+/\d+\]", l)), None)
     if step is None:
-        step = next((l for l in lines if "failed to solve" in l), "Unknown step")
+        step = next((l for l in lines if "failed to solve:" in l), "Unknown step")
     return {"step": step, "errors": error_lines[:20], "raw": log[-3000:]}

@@ -1305,7 +1305,7 @@ class DevOpsAgent:
                         entry.get("logs") or entry.get("console_log") or entry.get("build_log") or ""
                     )
                     if not re.search(
-                        r"^Step \d+(?:/\d+)?[ \t]*:|^#\d+ \[\d+/\d+\]|failed to solve",
+                        r"^Step \d+(?:/\d+)?[ \t]*:|^#\d+ \[\d+/\d+\]|failed to solve:",
                         log_text,
                         re.MULTILINE,
                     ):

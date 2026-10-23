@@ -309,3 +309,105 @@ class TestDockerContext:
         }
         assert enriched.get("ci_logs") == ci_logs
         assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_non_docker_failed_to_solve_without_colon_keeps_context(
+        self, ci_logs, monkeypatch
+    ):
+        agent = DevOpsAgent()
+        ci_logs["failed_jobs"][0]["logs"] = "ERROR: failed to solve linear system\n"
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("ci_logs") == ci_logs
+        assert "docker_build_error" not in enriched
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_buildkit_steps_after_preamble_add_truncated_error(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        log = (
+            "Building application image\n"
+            "#7 [3/5] RUN pip install -r requirements.txt\n"
+            + "#7 0.526 Collecting application dependencies\n" * 100
+            + "#7 0.789 ERROR: No matching distribution found for missing-package\n"
+        )
+        assert len(log) > 3000
+        ci_logs["failed_jobs"][0]["logs"] = log
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": "#7 [3/5] RUN pip install -r requirements.txt",
+            "errors": ["#7 0.789 ERROR: No matching distribution found for missing-package"],
+            "raw": log[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_buildkit_near_miss_steps_keep_context(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        ci_logs["failed_jobs"][0]["logs"] = (
+            "prefix #7 [3/5] RUN pip install -r requirements.txt\n"
+            "#7 [3/x] RUN pip install -r requirements.txt\n"
+            "ERROR: No matching distribution found for missing-package\n"
+        )
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("ci_logs") == ci_logs
+        assert "docker_build_error" not in enriched
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "log, step, errors",
+        [
+            (
+                "ERROR: failed to solve: no build stage in current context\n"
+                "#7 [3/5] RUN pip install -r requirements.txt\n",
+                "#7 [3/5] RUN pip install -r requirements.txt",
+                ["ERROR: failed to solve: no build stage in current context"],
+            ),
+            (
+                "#7 [3/5] RUN pip install -r requirements.txt\n"
+                "Step 1/2 : FROM python:3.11-slim\n"
+                "ERROR: No matching distribution found for missing-package\n",
+                "Step 1/2 : FROM python:3.11-slim",
+                ["ERROR: No matching distribution found for missing-package"],
+            ),
+        ],
+        ids=["summary-before-buildkit", "buildkit-before-classic"],
+    )
+    async def test_mixed_build_markers_follow_ladder_precedence(
+        self, ci_logs, monkeypatch, log, step, errors
+    ):
+        agent = DevOpsAgent()
+        ci_logs["failed_jobs"][0]["logs"] = log
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": step,
+            "errors": errors,
+            "raw": log[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
+        assert "collection_error" not in enriched
