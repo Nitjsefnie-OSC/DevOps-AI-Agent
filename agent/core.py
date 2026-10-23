@@ -1304,7 +1304,11 @@ class DevOpsAgent:
                     log_text = (
                         entry.get("logs") or entry.get("console_log") or entry.get("build_log") or ""
                     )
-                    if not re.search(r"^Step \d+(?:/\d+)?[ \t]*:", log_text, re.MULTILINE):
+                    if not re.search(
+                        r"^Step \d+(?:/\d+)?[ \t]*:|^#\d+ \[\d+/\d+\]|failed to solve",
+                        log_text,
+                        re.MULTILINE,
+                    ):
                         continue
                     build_error = parse_build_error(scrub_text(log_text))
                     if build_error["errors"]:

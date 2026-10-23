@@ -26,6 +26,48 @@ FAILED_DOCKER_LOG = (
     "The command '/bin/sh -c pip install -r requirements.txt' returned a non-zero code: 1\n"
 )
 
+
+FAILED_BUILDKIT_STEP_LOG = (
+    "#5 [1/5] FROM python:3.11-slim\n"
+    "#5 DONE 0.1s\n"
+    "#6 [2/5] COPY requirements.txt .\n"
+    "#6 DONE 0.0s\n"
+    "#7 [3/5] RUN pip install -r requirements.txt\n"
+    "#7 0.526 Collecting application dependencies\n"
+    "#7 0.789 ERROR: No matching distribution found for missing-package\n"
+    '#7 ERROR: process "/bin/sh -c pip install -r requirements.txt" '
+    "did not complete successfully: exit code: 1\n"
+)
+
+FAILED_BUILDKIT_LOG = (
+    FAILED_BUILDKIT_STEP_LOG
+    + "------\n"
+    " > [3/5] RUN pip install -r requirements.txt:\n"
+    "0.789 ERROR: No matching distribution found for missing-package\n"
+    "------\n"
+    "Dockerfile:4\n"
+    "--------------------\n"
+    "   2 |     FROM python:3.11-slim\n"
+    "   3 |     COPY requirements.txt .\n"
+    "   4 | >>> RUN pip install -r requirements.txt\n"
+    "--------------------\n"
+    'ERROR: failed to solve: process "/bin/sh -c pip install -r requirements.txt" '
+    "did not complete successfully: exit code: 1\n"
+)
+
+SUCCESSFUL_BUILDKIT_LOG = (
+    "#5 [1/3] FROM python:3.11-slim\n"
+    "#5 DONE 0.1s\n"
+    "#6 [2/3] COPY requirements.txt .\n"
+    "#6 DONE 0.0s\n"
+    "#7 [3/3] RUN pip install -r requirements.txt\n"
+    "#7 0.526 Collecting application dependencies\n"
+    "#7 0.789 Successfully installed application dependencies\n"
+    "#7 DONE 1.0s\n"
+)
+
+FAILED_TO_SOLVE_LOG = "ERROR: failed to solve: no build stage in current context\n"
+
 SUCCESSFUL_DOCKER_LOG = (
     "Step 1/2 : FROM python:3.11-slim\n"
     " ---> Using cache\n"
@@ -183,4 +225,87 @@ class TestDockerContext:
 
         assert enriched.get("ci_logs") == ci_logs
         assert "docker_build_error" not in enriched
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_failed_buildkit_build_adds_first_parsed_error(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        ci_logs["failed_jobs"][0]["logs"] = FAILED_BUILDKIT_LOG
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": "#5 [1/5] FROM python:3.11-slim",
+            "errors": [
+                "#7 0.789 ERROR: No matching distribution found for missing-package",
+                '#7 ERROR: process "/bin/sh -c pip install -r requirements.txt" '
+                "did not complete successfully: exit code: 1",
+                "0.789 ERROR: No matching distribution found for missing-package",
+                'ERROR: failed to solve: process "/bin/sh -c pip install -r requirements.txt" '
+                "did not complete successfully: exit code: 1",
+            ],
+            "raw": FAILED_BUILDKIT_LOG[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_buildkit_step_without_summary_adds_error(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        ci_logs["failed_jobs"][0]["logs"] = FAILED_BUILDKIT_STEP_LOG
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": "#5 [1/5] FROM python:3.11-slim",
+            "errors": [
+                "#7 0.789 ERROR: No matching distribution found for missing-package",
+                '#7 ERROR: process "/bin/sh -c pip install -r requirements.txt" '
+                "did not complete successfully: exit code: 1",
+            ],
+            "raw": FAILED_BUILDKIT_STEP_LOG[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_successful_buildkit_build_keeps_context(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        ci_logs["failed_jobs"][0]["logs"] = SUCCESSFUL_BUILDKIT_LOG
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("ci_logs") == ci_logs
+        assert "docker_build_error" not in enriched
+        assert "collection_error" not in enriched
+
+    @pytest.mark.asyncio
+    async def test_failed_to_solve_without_steps_adds_error(self, ci_logs, monkeypatch):
+        agent = DevOpsAgent()
+        ci_logs["failed_jobs"][0]["logs"] = FAILED_TO_SOLVE_LOG
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": "ERROR: failed to solve: no build stage in current context",
+            "errors": ["ERROR: failed to solve: no build stage in current context"],
+            "raw": FAILED_TO_SOLVE_LOG[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
         assert "collection_error" not in enriched
