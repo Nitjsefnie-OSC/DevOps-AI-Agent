@@ -138,8 +138,9 @@ def timestamped(log: str) -> str:
 
 
 # Near-miss prefixes that are not GitHub Actions timestamps: time-only (no date),
-# a space instead of T, no space after Z, leading log text, a lowercase z, and a
-# tab after Z (the prefix ends with exactly one space).
+# a space instead of T, no space after Z, leading log text, a lowercase z, a tab
+# after Z (the prefix ends with exactly one space), and letters inside the time
+# part (the tail accepts only digits and : .).
 TIMESTAMP_DECOY_LINES = (
     "12:00:00Z #7 [3/5] RUN pip install -r requirements.txt\n"
     "2026-10-23 12:00:00.1234567Z #7 [3/5] RUN pip install -r requirements.txt\n"
@@ -147,6 +148,7 @@ TIMESTAMP_DECOY_LINES = (
     "log 2026-10-23T12:00:00Z #7 [3/5] RUN pip install -r requirements.txt\n"
     "2026-10-23T12:00:00.1234567z #7 [3/5] RUN pip install -r requirements.txt\n"
     "2026-10-23T12:00:00.1234567Z\t#7 [3/5] RUN pip install -r requirements.txt\n"
+    "2026-10-23T12a3Z #7 [3/5] RUN pip install -r requirements.txt\n"
 )
 
 # A warning line between steps carries none of the error keywords, so it is not
