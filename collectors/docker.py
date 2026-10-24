@@ -4,10 +4,10 @@ import re
 
 # GitHub Actions prefixes every log line with a timestamp such as
 # "2026-10-23T12:00:00.1234567Z ".
-_TIMESTAMP = r"(?:(\d{4}-\d\d-\d\dT[\d:.]+Z) )?"
+_TIMESTAMP = r"(?:(?P<ts>\d{4}-\d\d-\d\dT[\d:.]+Z) )?"
 _CLASSIC_STEP_RE = re.compile(_TIMESTAMP + r"Step \d+(?:/\d+)?[ \t]*:")
 _BUILDKIT_STEP_RE = re.compile(_TIMESTAMP + r"#\d+ \[\d+/\d+\]")
-_BUILDKIT_ERROR_RE = re.compile(_TIMESTAMP + r"#(\d+) ERROR")
+_BUILDKIT_ERROR_RE = re.compile(_TIMESTAMP + r"#(?P<id>\d+) ERROR")
 
 
 def _is_error_line(line: str) -> bool:
@@ -16,7 +16,7 @@ def _is_error_line(line: str) -> bool:
 
 def _bare(line: str, match: re.Match) -> str:
     """The line without its optional GitHub Actions timestamp prefix."""
-    return line[len(match.group(1)) + 1:] if match.group(1) else line
+    return line[len(match.group("ts")) + 1:] if match.group("ts") else line
 
 
 def _step_lines(lines: list[str], step_re: re.Pattern) -> list[str]:
@@ -28,7 +28,7 @@ def _failing_step(lines: list[str]) -> str | None:
     """The step that failed: the #N [i/j] step line whose #N ERROR line reports
     the failure, else the last step line before the first error line."""
     error_id = next(
-        (match.group(2) for line in lines if (match := _BUILDKIT_ERROR_RE.match(line))),
+        (match.group("id") for line in lines if (match := _BUILDKIT_ERROR_RE.match(line))),
         None,
     )
     if error_id is not None:
