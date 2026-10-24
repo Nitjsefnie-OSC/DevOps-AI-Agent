@@ -138,12 +138,29 @@ def timestamped(log: str) -> str:
 
 
 # Near-miss prefixes that are not GitHub Actions timestamps: time-only (no date),
-# a space instead of T, no space after Z, and leading log text.
+# a space instead of T, no space after Z, leading log text, a lowercase z, and a
+# tab after Z (the prefix ends with exactly one space).
 TIMESTAMP_DECOY_LINES = (
     "12:00:00Z #7 [3/5] RUN pip install -r requirements.txt\n"
     "2026-10-23 12:00:00.1234567Z #7 [3/5] RUN pip install -r requirements.txt\n"
     "2026-10-23T12:00:00.1234567Z#7 [3/5] RUN pip install -r requirements.txt\n"
     "log 2026-10-23T12:00:00Z #7 [3/5] RUN pip install -r requirements.txt\n"
+    "2026-10-23T12:00:00.1234567z #7 [3/5] RUN pip install -r requirements.txt\n"
+    "2026-10-23T12:00:00.1234567Z\t#7 [3/5] RUN pip install -r requirements.txt\n"
+)
+
+# A warning line between steps carries none of the error keywords, so it is not
+# an error line: the failing step stays the last step line before the first real
+# error line.
+WARNING_BETWEEN_STEPS_LOG = (
+    "#5 [1/5] FROM python:3.11-slim\n"
+    "#5 DONE 0.1s\n"
+    "#6 [2/5] COPY requirements.txt .\n"
+    "#6 0.100 deprecation warning: field X is deprecated\n"
+    "#6 DONE 0.0s\n"
+    "#7 [3/5] RUN pip install -r requirements.txt\n"
+    "#7 0.526 Collecting application dependencies\n"
+    "ERROR: No matching distribution found for missing-package\n"
 )
 
 
@@ -719,6 +736,44 @@ class TestDockerContext:
         assert "docker_build_error" not in enriched
         assert "collection_error" not in enriched
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "near_miss_line",
+        [
+            "2026-10-23T12:00:00.1234567z #7 [3/5] RUN pip install -r requirements.txt\n",
+            "2026-10-23T12:00:00.1234567Z\t#7 [3/5] RUN pip install -r requirements.txt\n",
+        ],
+        ids=["lowercase-z", "tab-after-z"],
+    )
+    async def test_near_miss_timestamp_tail_does_not_change_step(
+        self, ci_logs, monkeypatch, near_miss_line
+    ):
+        # A valid timestamped step line fires the trigger; a near-miss tail
+        # must not become a step line and flip the failing-step selection.
+        agent = DevOpsAgent()
+        log = (
+            "2026-10-23T12:00:00.1234567Z #5 [1/5] FROM python:3.11-slim\n"
+            + near_miss_line
+            + "2026-10-23T12:00:00.1234567Z ERROR: No matching distribution found for missing-package\n"
+        )
+        ci_logs["failed_jobs"][0]["logs"] = log
+
+        async def fake_collect(repo, run_id):
+            return ci_logs
+
+        monkeypatch.setattr(agent.github_collector, "collect", fake_collect)
+        enriched = await agent._collect_context(CONTEXT)
+
+        assert enriched.get("docker_build_error") == {
+            "step": "#5 [1/5] FROM python:3.11-slim",
+            "errors": [
+                "2026-10-23T12:00:00.1234567Z ERROR: No matching distribution found for missing-package"
+            ],
+            "raw": log[-3000:],
+        }
+        assert enriched.get("ci_logs") == ci_logs
+        assert "collection_error" not in enriched
+
 
 class TestParseBuildError:
     @pytest.mark.parametrize(
@@ -746,3 +801,20 @@ class TestParseBuildError:
         parsed = parse_build_error(MIXED_MARKERS_NO_ERROR_LOG)
         assert parsed["step"] == "Step 1/2 : FROM python:3.11-slim"
         assert parsed["errors"] == []
+
+    def test_warning_line_is_not_an_error_line(self):
+        parsed = parse_build_error(WARNING_BETWEEN_STEPS_LOG)
+        assert parsed["step"] == "#7 [3/5] RUN pip install -r requirements.txt"
+        assert parsed["errors"] == [
+            "ERROR: No matching distribution found for missing-package"
+        ]
+
+    def test_timestamp_without_fraction_matches(self):
+        parsed = parse_build_error(
+            "2026-10-23T12:00:00Z #7 [3/5] RUN pip install -r requirements.txt\n"
+            "2026-10-23T12:00:00Z ERROR: No matching distribution found for missing-package\n"
+        )
+        assert parsed["step"] == "#7 [3/5] RUN pip install -r requirements.txt"
+        assert parsed["errors"] == [
+            "2026-10-23T12:00:00Z ERROR: No matching distribution found for missing-package"
+        ]
