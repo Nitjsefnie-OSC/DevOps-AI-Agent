@@ -89,15 +89,20 @@ FAILED_DOCKER_RETRY_LOG = (
 )
 
 # #8 runs in parallel with #7 and prints step lines between #7's start and its
-# failure, so only the #7 ERROR line's step id picks the failing step.
+# failure, so only the #7 ERROR line's step id picks the failing step. #70 sits
+# above #7 so id-prefix matching without the delimiter would pick it, and the
+# embedded "--- #9 ERROR ---" line is not a step-id anchor (only a line starting
+# with the id is).
 FAILED_BUILDKIT_PARALLEL_LOG = (
     "#5 [1/5] FROM python:3.11-slim\n"
     "#5 DONE 0.1s\n"
     "#6 [2/5] COPY requirements.txt .\n"
     "#6 DONE 0.0s\n"
+    "#70 [4/5] RUN apt-get upgrade -y\n"
     "#7 [3/5] RUN pip install -r requirements.txt\n"
     "#8 [4/5] RUN apt-get update\n"
     "#7 0.526 Collecting application dependencies\n"
+    "--- #9 ERROR ---\n"
     "#7 0.789 ERROR: No matching distribution found for missing-package\n"
     '#7 ERROR: process "/bin/sh -c pip install -r requirements.txt" '
     "did not complete successfully: exit code: 1\n"
@@ -115,6 +120,14 @@ FAILED_BUILDKIT_NO_ERROR_LOG = (
     "ERROR: No matching distribution found for missing-package\n"
     "Retrying build\n"
     "#9 [1/2] FROM debian:bookworm\n"
+)
+
+# No error lines: parse falls back to the marker ladder, classic before BuildKit.
+MIXED_MARKERS_NO_ERROR_LOG = (
+    "#5 [1/5] FROM python:3.11-slim\n"
+    "#5 DONE 0.1s\n"
+    "Step 1/2 : FROM python:3.11-slim\n"
+    " ---> Using cache\n"
 )
 
 GHA_TIMESTAMP = "2026-10-23T12:00:00.1234567Z "
@@ -562,6 +575,7 @@ class TestDockerContext:
         assert enriched.get("docker_build_error") == {
             "step": "#7 [3/5] RUN pip install -r requirements.txt",
             "errors": [
+                "--- #9 ERROR ---",
                 "#7 0.789 ERROR: No matching distribution found for missing-package",
                 '#7 ERROR: process "/bin/sh -c pip install -r requirements.txt" '
                 "did not complete successfully: exit code: 1",
@@ -725,3 +739,10 @@ class TestParseBuildError:
             TIMESTAMP_DECOY_LINES + "ERROR: No matching distribution found for missing-package\n"
         )
         assert parsed["step"] == "Unknown step"
+
+    def test_no_error_ladder_prefers_classic_markers(self):
+        # Without error lines the ladder falls back to the first step line,
+        # classic markers before BuildKit markers regardless of log order.
+        parsed = parse_build_error(MIXED_MARKERS_NO_ERROR_LOG)
+        assert parsed["step"] == "Step 1/2 : FROM python:3.11-slim"
+        assert parsed["errors"] == []
